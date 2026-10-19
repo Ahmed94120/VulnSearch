@@ -41,4 +41,4 @@ for label, org, nv in cases:
         return nv
     s.fetch_cve_org, s.fetch_nvd = fo, fn
     r = s.assess({"cveID": "CVE-X", "shortDescription": "", "vulnerabilityName": ""})
-    print(f"{label:36s} {r['status']:9s} {r['reason']}")
+    print(f"{label:36s} {r['status']:9s} {r['check'] or '-':12s} {r['reason']}")

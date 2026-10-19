@@ -10,7 +10,7 @@ vec = {"CVE-MATCH": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "CVE-NOMATCH
 vulnScore.Scorer.fetch_cve_org = lambda self, c: {"containers": {"cna": {"metrics": [{"cvssV3_1": {"vectorString": vec[c]}}] if vec[c] else [], "problemTypes": [{"descriptions": [{"cweId": "CWE-78"}]}]}}}
 vulnScore.Scorer.fetch_nvd = lambda self, c: None
 sent = []
-vulnAlert._smtp_send = lambda subj, body, to: sent.append((to, subj))
+vulnAlert._smtp_send = lambda subj, text, to, html=None: sent.append((to, subj))
 cards = []
 vulnAlert.send_teams = lambda card, url: cards.append(card["attachments"][0]["content"]["body"][0]["text"]) or 202
 vulnAlert.run()

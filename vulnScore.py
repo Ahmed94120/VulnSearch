@@ -214,12 +214,13 @@ class Scorer:
         """Assess one KEV entry. Never raises: any problem gives TO_CHECK."""
         cve_id = kev_entry.get("cveID")
         result = {"status": "TO_CHECK", "reason": None, "vector": None, "source": None,
-                  "type": None, "type_evidence": None, "cwes": []}
+                  "type": None, "type_evidence": None, "cwes": [], "check": None}
         try:
             return self._assess(cve_id, kev_entry, result)
         except Exception as e:
             logger.exception("assess failed for %s", cve_id)
             result["reason"] = f"automatic assessment failed ({type(e).__name__})"
+            result["check"] = "error"
             return result
 
     def _assess(self, cve_id, kev_entry, result):
@@ -236,6 +237,7 @@ class Scorer:
             if state == "REJECTED":
                 # Still listed in the KEV: a human must decide (ID replaced? listing error?).
                 result["reason"] = "CVE record is REJECTED on CVE.org while listed in the KEV"
+                result["check"] = "rejected"
                 return result
             for label, metrics, cwes, block_texts in self._cve_org_sources(record):
                 all_cwes |= cwes
@@ -264,15 +266,19 @@ class Scorer:
         if vector is None:
             if errors:
                 result["reason"] = "CVSS sub-scores could not be fetched: " + "; ".join(errors)
+                result["check"] = "unreachable"
             elif saw_v2:
                 result["reason"] = "only a CVSS v2 vector is published (no PR / UI sub-scores)"
+                result["check"] = "cvss_v2"
             else:
                 result["reason"] = "no CVSS vector published on CVE.org or NVD"
+                result["check"] = "no_vector"
             return result
 
         ok, detail = self.check_subscores(vector)
         if ok is None:
             result["reason"] = detail
+            result["check"] = "bad_vector"
             return result
         if not ok:
             result["status"] = "NO_MATCH"
@@ -291,4 +297,5 @@ class Scorer:
         else:
             result["reason"] = ("CVSS criteria met, but the vulnerability type (RCE / Authentication "
                                 "Bypass) could not be determined: no CWE and no explicit wording")
+            result["check"] = "type_unknown"
         return result

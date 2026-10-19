@@ -1,6 +1,8 @@
 # Secrets: never commit the Teams webhook
 .teams_webhook
 .env
+.env.*
+!.env.example
 
 # Runtime state and logs (live on the server only)
 alerted_cves.json
@@ -21,3 +23,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Local test output (send_test.py: .eml contain addresses)
+test_output/

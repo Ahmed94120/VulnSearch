@@ -2,11 +2,15 @@ import config  # noqa: F401  (loads .env before any os.environ read)
 import os
 import json
 import logging
+import re
 import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import smtplib
+import ssl
 from pathlib import Path
+
+from render import build_card, render_mail
 
 BASE_DIR = Path(os.environ.get("VULNSG_DIR", "/home/sysroot/VulnSG"))
 LOG_FILE = BASE_DIR / "vulnscan.log"
@@ -33,13 +37,26 @@ NOTIFY_MODE = os.environ.get("NOTIFY_MODE", "all")
 L1_EMAILS = [a.strip() for a in os.environ.get("L1_EMAILS", "").split(",") if a.strip()]
 REVIEW_EMAILS = [a.strip() for a in os.environ.get("REVIEW_EMAILS", "").split(",") if a.strip()]
 
-SMTP_HELLO = "p-tvm-ctl-l-01.prod-client.itm.lan"
-SMTP_FROM = "monitoring_cybertools@cybersoc.orangecyberdefense.com"
-SMTP_HOST = "relay.itm.lan"
-SMTP_PORT = 25
-CUSTOMER_EMAILS = ["GSC-VH-VULN@socgen.com"]
-BCC_EMAILS = ["olivier.leung@orangecyberdefense.com", "noor.mohamed@orangecyberdefense.com",
-              "ahmed.bouhafa@orangecyberdefense.com", "cybersoc.mru@orange.com"]
+# Defaults = production relay. SMTP_USER set: STARTTLS + login (e.g. Gmail on 587).
+SMTP_HELLO = os.environ.get("SMTP_HELLO", "p-tvm-ctl-l-01.prod-client.itm.lan")
+SMTP_FROM = os.environ.get("SMTP_FROM", "monitoring_cybertools@cybersoc.orangecyberdefense.com")
+SMTP_HOST = os.environ.get("SMTP_HOST", "relay.itm.lan")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "25"))
+SMTP_USER = os.environ.get("SMTP_USER")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
+# MAIL_TEST_TO set: every email goes ONLY to these addresses (no customer, no BCC), subject "[TEST] ".
+MAIL_TEST_TO = [a.strip() for a in os.environ.get("MAIL_TEST_TO", "").split(",") if a.strip()]
+# MAIL_EML_DIR set: write each email as a .eml file in this folder instead of sending it.
+MAIL_EML_DIR = os.environ.get("MAIL_EML_DIR", "").strip()
+
+
+def _emails(name, default=""):
+    return [a.strip() for a in os.environ.get(name, default).split(",") if a.strip()]
+
+
+CUSTOMER_EMAILS = _emails("CUSTOMER_EMAILS", "GSC-VH-VULN@socgen.com")
+BCC_EMAILS = _emails("BCC_EMAILS", "olivier.leung@orangecyberdefense.com,noor.mohamed@orangecyberdefense.com,"
+                                   "ahmed.bouhafa@orangecyberdefense.com")
 ONCALL_BLOCK = """Telephone Information:
 Primary OnCall Number - +91 9148418803
 First Level of Escalation for OnCall Number - +91 9916392561
@@ -77,90 +94,6 @@ def save_alerted(alerted):
         json.dump(sorted(alerted), f)
     os.replace(tmp, STATE_FILE)
     logger.debug("saved %d alerted cve(s) to %s", len(alerted), STATE_FILE)
-
-
-def _exploit_summary(vuln):
-    ex = vuln.get("exploits", {})
-    parts = []
-    if ex.get("kev"):
-        parts.append("KEV")
-    if ex.get("metasploit"):
-        parts.append(f"Metasploit x{len(ex['metasploit'])}")
-    if ex.get("exploitdb"):
-        parts.append(f"Exploit-DB x{len(ex['exploitdb'])}")
-    return ", ".join(parts) if parts else "no public exploit"
-
-
-CARD_HEADERS = {
-    None: ("\U0001F6A8 {n} publicly exploited vuln(s)", "Attention"),
-    "MATCH": ("\U0001F6A8 {n} exploited vuln(s) - SG criteria met, L1 notified", "Attention"),
-    "TO_CHECK": ("⚠️ {n} exploited vuln(s) - TO CHECK, scoring not determined", "Warning"),
-    "NO_MATCH": ("ℹ️ {n} exploited vuln(s) - SG criteria not met, no email", "Default"),
-}
-
-
-def build_card(vulns, type_cve):
-    status = (vulns[0].get("assessment") or {}).get("status") if vulns else None
-    title, color = CARD_HEADERS.get(status, CARD_HEADERS[None])
-    body = [{
-        "type": "TextBlock",
-        "size": "Large",
-        "weight": "Bolder",
-        "color": color,
-        "text": title.format(n=len(vulns)),
-        "wrap": True,
-    }]
-
-    for v in vulns:
-        facts = [
-            {"title": "CVE", "value": _cve_id(v) or ""},
-            {"title": "Vendor", "value": v.get("vendorProject", "")},
-            {"title": "Product", "value": v.get("product", "")},
-            {"title": "Exploit", "value": _exploit_summary(v)},
-        ]
-        a = v.get("assessment")
-        if a:
-            facts += [
-                {"title": "Status", "value": a["status"]},
-                {"title": "Vector", "value": a.get("vector") or "not available"},
-                {"title": "Source", "value": a.get("source") or "-"},
-                {"title": "Reason", "value": a.get("reason") or "-"},
-            ]
-        body.append({"type": "FactSet", "facts": facts})
-        desc = v.get("shortDescription")
-        if desc:
-            body.append({
-                "type": "TextBlock",
-                "text": desc,
-                "wrap": True,
-                "spacing": "Small",
-                "isSubtle": True,
-            })
-        cid = _cve_id(v)
-        if cid:
-            body.append({
-                "type": "ActionSet",
-                "actions": [
-                    {
-                        "type": "Action.OpenUrl",
-                        "title": "Voir sur MITRE",
-                        "url": f"https://www.cve.org/CVERecord?id={cid}",
-                    },
-                ],
-            })
-
-    return {
-        "type": "message",
-        "attachments": [{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "type": "AdaptiveCard",
-                "version": "1.4",
-                "body": body,
-            },
-        }],
-    }
 
 
 def build_confirm_card(vuln):
@@ -213,23 +146,38 @@ def send_teams(card, webhook_url):
     return r.status_code
 
 
-def _smtp_send(subject, body, to):
+def _smtp_send(subject, text, to, html=None):
     """Raises on failure so the CVE is retried next run."""
-    msg = MIMEMultipart()
+    bcc = BCC_EMAILS
+    if MAIL_TEST_TO:
+        to, bcc, subject = MAIL_TEST_TO, [], "[TEST] " + subject
+    msg = MIMEMultipart("alternative")
     msg["From"] = SMTP_FROM
     msg["To"] = ", ".join(to)
     msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+    msg.attach(MIMEText(text, "plain", "utf-8"))
+    if html:
+        msg.attach(MIMEText(html, "html", "utf-8"))
+    if MAIL_EML_DIR:
+        name = re.sub(r"[^A-Za-z0-9-]+", "_", subject).strip("_")[:120] + ".eml"
+        Path(MAIL_EML_DIR, name).write_text(msg.as_string())
+        return
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
         server.ehlo(SMTP_HELLO)
-        server.sendmail(SMTP_FROM, to + BCC_EMAILS, msg.as_string())
+        if SMTP_USER:
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo(SMTP_HELLO)
+            server.login(SMTP_USER, SMTP_PASSWORD or "")
+        server.sendmail(SMTP_FROM, to + bcc, msg.as_string())
 
 
 def sendmail(vuln, type_cve):
     """NOTIFY_MODE=all: customer email for every new KEV entry (current behaviour)."""
     subject = f"[{vuln.get('cveID')}] - {vuln.get('vendorProject')} / {vuln.get('product')} (EXPLOITED)"
-    body = f"{subject}\n\nDescription: {vuln.get('shortDescription', 'N/A')}\n\n{ONCALL_BLOCK}"
-    _smtp_send(subject, body, CUSTOMER_EMAILS)
+    text, html = render_mail(vuln, "This vulnerability was added to the CISA Known Exploited "
+                                   "Vulnerabilities catalog: it is actively exploited in the wild.",
+                             ONCALL_BLOCK)
+    _smtp_send(subject, text, CUSTOMER_EMAILS, html)
     print(f"Email Sent ! ({vuln.get('cveID')})")
 
 
@@ -238,24 +186,18 @@ def sendmail_assessed(vuln):
     a = vuln["assessment"]
     cid = vuln.get("cveID")
     head = f"[{cid}] - {vuln.get('vendorProject')} / {vuln.get('product')}"
-    details = (f"Description: {vuln.get('shortDescription', 'N/A')}\n"
-               f"KEV date added: {vuln.get('dateAdded', 'N/A')}\n"
-               f"CVSS vector: {a.get('vector') or 'not available'}\n"
-               f"Source: {a.get('source') or 'N/A'}\n"
-               f"Reference: https://www.cve.org/CVERecord?id={cid}\n")
     if a["status"] == "MATCH":
         subject = f"{head} (EXPLOITED - {a['type']})"
-        body = (f"{subject}\n\nThis CVE was added to the CISA KEV catalog and meets the "
-                f"notification criteria (AV:N / AC:L / PR:N / UI:N, High impact, {a['type']}).\n\n"
-                f"{details}Vulnerability type evidence: {a.get('type_evidence')}\n\n{ONCALL_BLOCK}")
+        intro = (f"This CVE was added to the CISA KEV catalog and meets the SG notification criteria "
+                 f"(AV:N / AC:L / PR:N / UI:N, High impact, {a['type']}).")
         to = L1_EMAILS
     else:
         subject = f"{head} (EXPLOITED - MANUAL REVIEW REQUIRED)"
-        body = (f"{subject}\n\nThis CVE was added to the CISA KEV catalog, but the required "
-                f"scoring information could not be determined automatically.\n"
-                f"Reason: {a.get('reason')}\n\nPlease review it manually.\n\n{details}\n{ONCALL_BLOCK}")
+        intro = ("This CVE was added to the CISA KEV catalog, but the SG criteria could not be "
+                 "evaluated automatically. Please review it manually using the steps below.")
         to = REVIEW_EMAILS
-    _smtp_send(subject, body, to)
+    text, html = render_mail(vuln, intro, ONCALL_BLOCK)
+    _smtp_send(subject, text, to, html)
     print(f"Email Sent ! ({cid}, {a['status']})")
 
 

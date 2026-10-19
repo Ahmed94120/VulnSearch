@@ -5,7 +5,7 @@ import vulnSearch, vulnAlert, smtplib
 e = lambda c,d: {"cveID": c, "dateAdded": d, "vendorProject": "V", "product": "P"}
 vulnSearch.VulnerabilityClient.get_kev = lambda self: {"vulnerabilities": [e("CVE-A","2026-10-18"), e("CVE-B","2026-10-17"), e("CVE-C","2026-10-16")]}
 posted = []
-vulnAlert.send_teams = lambda card, url: posted.append(card["attachments"][0]["content"]["body"][1]["facts"][0]["value"]) or 202
+vulnAlert.send_teams = lambda card, url: posted.append(card["attachments"][0]["content"]["body"][1]["text"]) or 202
 smtplib.SMTP = lambda *a, **k: (_ for _ in ()).throw(AssertionError("SMTP must not be used"))
 import time; time.sleep = lambda s: None
 sys.argv = ["teams_only.py"] + sys.argv[2:]

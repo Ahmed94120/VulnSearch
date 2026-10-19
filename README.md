@@ -13,6 +13,8 @@ Le script tourne toutes les heures en cron sur `p-tvm-ctl-l-01`, depuis `/home/s
 | `vulnScore.py` | Critères SG : sous-scores CVSS et type RCE / contournement d'authentification, depuis CVE.org puis NVD. |
 | `vulnExploit.py` | Enrichissement KEV / Metasploit / Exploit-DB. N'est plus appelé par le cron. |
 | `teams_only.py` | Poste des cartes Teams sur une période, sans mail ni modification de l'état. |
+| `render.py` | Contenu des cartes Teams et des mails (HTML + texte). |
+| `send_test.py` | Envoie les mails (et cartes) d'une période à une seule adresse de test, sans modifier l'état. |
 | `config.py` | Charge le `.env` au démarrage. |
 | `tests/` | Tests hors ligne : réseau, SMTP et Teams simulés. |
 
@@ -34,6 +36,11 @@ cp .env.example .env && chmod 600 .env
 | `REVIEW_EMAILS` | (vide) | Destinataires des revues manuelles `TO_CHECK`. Obligatoire en mode `filtered`. |
 | `NVD_API_KEY` | (vide) | Clé NVD facultative : 50 requêtes / 30 s au lieu de 5. |
 | `DRY_RUN` | (vide) | `1` : affiche ce qui serait envoyé, n'envoie rien et n'écrit aucun état. |
+| `SMTP_HOST` / `SMTP_PORT` | `relay.itm.lan` / `25` | Serveur SMTP. |
+| `SMTP_USER` / `SMTP_PASSWORD` | (vide) | Si renseignés : STARTTLS + authentification (ex. Gmail, port 587, mot de passe d'application). |
+| `SMTP_FROM` | `monitoring_cybertools@...` | Expéditeur. Avec Gmail, mettre l'adresse du compte. |
+| `MAIL_TEST_TO` | (vide) | Tous les mails partent uniquement à cette adresse (ni client ni BCC), objet préfixé `[TEST]`. |
+| `MAIL_EML_DIR` | (vide) | Écrit chaque mail en `.eml` dans ce dossier au lieu de l'envoyer. |
 | `VULNSG_DIR` | `/home/sysroot/VulnSG` | Dossier des logs et des fichiers d'état. |
 | `VULN_STATE_FILE` | `$VULNSG_DIR/alerted_cves.json` | Historique des CVE déjà traitées. |
 | `VULNSG_ENV_FILE` | `.env` à côté des scripts | Fichier de configuration à charger. |
@@ -86,6 +93,11 @@ python3 teams_only.py --since 2026-10-13 --assess        # avec les critères SG
 
 # Test à blanc du mode SG
 DRY_RUN=1 NOTIFY_MODE=filtered L1_EMAILS=test REVIEW_EMAILS=test python3 vulnAlert.py
+
+# Mails de test vers une seule adresse (aperçu HTML local avec --preview)
+python3 send_test.py --since 2026-10-15 --to moi@example.com --preview
+python3 send_test.py --since 2026-10-15 --to moi@example.com [--teams]
+python3 send_test.py --since 2026-10-15 --eml ~/Downloads/eml --teams   # cartes postées, mails en .eml
 
 # Tests hors ligne
 ./tests/run_all.sh
