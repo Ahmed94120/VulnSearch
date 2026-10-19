@@ -7,7 +7,7 @@ Implements the SG criteria (feasibility request, 19/10/2026):
 
 assess() returns one of three statuses:
   MATCH     all criteria met                               -> email
-  TO_CHECK  data missing / unreadable / sources unreachable -> email, manual review
+  TO_CHECK  data missing / unreadable / sources unreachable -> email, customer checks
   NO_MATCH  data available and criteria not met            -> no email
 
 Sources, in this order: CVE.org (CNA, then ADP e.g. CISA-ADP), then NVD.

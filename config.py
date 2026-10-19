@@ -31,3 +31,9 @@ def load_env(path=ENV_FILE):
 
 
 load_env()
+
+# Folder for logs and state files. VULNSG_DIR wins; otherwise the server path,
+# or the scripts' own folder when that path does not exist (laptop).
+_SERVER_DIR = Path("/home/sysroot/VulnSG")
+BASE_DIR = Path(os.environ.get("VULNSG_DIR") or (
+    _SERVER_DIR if _SERVER_DIR.is_dir() else Path(__file__).resolve().parent)).expanduser()

@@ -4,9 +4,10 @@
 .env.*
 !.env.example
 
-# Runtime state and logs (live on the server only)
+# Runtime state, journal and logs (live on the server only)
 alerted_cves.json
 previous_run.json
+runs.jsonl
 *.json.tmp
 *.log
 
@@ -24,5 +25,7 @@ venv/
 .idea/
 .DS_Store
 
-# Local test output (send_test.py: .eml contain addresses)
+# Local tool settings and old test output (archived outside the repo)
+.claude/
 test_output/
+preview/

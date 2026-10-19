@@ -17,9 +17,9 @@ TEAM = "CyberSOC - Vulnerability watch"
 STATUS_STYLE = {
     None: ("\U0001F6A8 Publicly exploited vulnerability", "Attention", ORANGE, BLACK,
            "EXPLOITED"),
-    "MATCH": ("\U0001F6A8 Exploited vulnerability - SG criteria met, L1 notified", "Attention", RED, "#FFFFFF",
+    "MATCH": ("\U0001F6A8 Exploited vulnerability - SG criteria met, customer and L1 notified", "Attention", RED, "#FFFFFF",
               "SG CRITERIA MET"),
-    "TO_CHECK": ("⚠️ Exploited vulnerability - TO CHECK, scoring not determined", "Warning", YELLOW, BLACK,
+    "TO_CHECK": ("⚠️ Exploited vulnerability - TO CHECK, scoring not determined, customer and L1 notified", "Warning", YELLOW, BLACK,
                  "MANUAL REVIEW"),
     "NO_MATCH": ("ℹ️ Exploited vulnerability - SG criteria not met, no email", "Default", GREY, "#FFFFFF",
                  "SG CRITERIA NOT MET"),
@@ -34,62 +34,68 @@ CRITERIA = (
 )
 URL_RE = re.compile(r"https?://[^\s;]+")
 
-# TO_CHECK: what the analyst verifies, by assessment["check"] (set in vulnScore.py).
-REVIEW_CRITERIA = ("SG criteria: AV:N, AC:L, PR:N, UI:N, at least one High impact on C/I/A, "
-                   "and type RCE or Authentication Bypass.")
-_ASSESS_FROM_ADVISORY = ("From the vendor advisory and the description, answer: exploitable over the network "
-                         "(AV:N)? Low complexity, no special conditions (AC:L)? Without any account or "
-                         "authentication (PR:N)? Without user action, e.g. no click or file to open (UI:N)? "
-                         "High impact on confidentiality, integrity or availability?")
-_ASSESS_TYPE = ("Type: arbitrary code or command execution = RCE; access to the product or its data without "
-                "valid credentials = Authentication Bypass; anything else (XSS, path traversal, "
-                "information disclosure, DoS...) = criteria not met.")
+# TO_CHECK: what the customer verifies, by assessment["check"] (set in vulnScore.py).
 REVIEW_STEPS = {
     "no_vector": [
-        "No CVSS score is published yet, which is common for a CVE added to the KEV in the last days "
-        "(NVD enrichment backlog). Open the CVE.org and NVD links: a vector may have been published since.",
-        _ASSESS_FROM_ADVISORY,
-        _ASSESS_TYPE,
-        "If the advisory is too vague to decide, check CVE.org / NVD again within 24-48 h.",
+        "No CVSS score published yet (recent CVE, NVD backlog)",
+        "Open CVE.org and NVD: a vector may be out now",
+        "Otherwise answer the checklist from the vendor advisory",
+        "Advisory too vague: check again within 24-48 h",
     ],
     "cvss_v2": [
-        "Only a CVSS v2 score exists (old CVE): v2 has no PR or UI sub-score. Check NVD for a v3 vector "
-        "added since.",
-        _ASSESS_FROM_ADVISORY + " In v2, Au:N means no authentication (PR:N).",
-        _ASSESS_TYPE,
+        "Only a CVSS v2 score (old CVE): no PR / UI sub-score",
+        "Look for a v3 vector on NVD",
+        "Otherwise answer the checklist from the vendor advisory (v2 Au:N = PR:N)",
     ],
     "unreachable": [
-        "CVE.org and/or NVD could not be reached by the script. Open the CVE.org and NVD links.",
-        "If a CVSS v3 / v4 vector is shown, compare it with the criteria above; otherwise follow the "
-        "vendor advisory: " + _ASSESS_FROM_ADVISORY,
-        _ASSESS_TYPE,
+        "CVE.org and/or NVD could not be reached by the script",
+        "Open CVE.org and NVD, compare the vector with the checklist",
+        "No vector: answer the checklist from the vendor advisory",
     ],
     "rejected": [
-        "The CVE is REJECTED on CVE.org but still listed in the CISA KEV. Open the CVE.org link and read "
-        "the rejection reason: it usually names the replacement CVE ID.",
-        "Open the CISA KEV link to confirm which CVE ID CISA lists now.",
-        "Assess the replacement CVE against the criteria (its CVSS vector on CVE.org / NVD, then its type).",
+        "CVE REJECTED on CVE.org but still listed in the CISA KEV",
+        "CVE.org: read the rejection reason, note the replacement CVE ID",
+        "CISA KEV: confirm which CVE ID is listed now",
+        "Run the checklist on the replacement CVE",
     ],
     "bad_vector": [
-        "The published CVSS vector is incomplete or uses an unsupported version (see Decision). Open the "
-        "NVD and CVE.org links and look for a complete v3.x / v4.0 vector.",
-        "Fill in the missing sub-scores from the vendor advisory: " + _ASSESS_FROM_ADVISORY,
-        _ASSESS_TYPE,
+        "CVSS vector incomplete or unsupported version (see Decision)",
+        "Look for a complete v3.x / v4.0 vector on NVD and CVE.org",
+        "Missing sub-scores: answer from the vendor advisory",
     ],
     "type_unknown": [
-        "The CVSS criteria are met (see SG criteria above); only the type is missing: no CWE and no "
-        "explicit wording in the description.",
-        "Read the vendor advisory. " + _ASSESS_TYPE,
+        "CVSS criteria already met (see SG criteria)",
+        "Type unknown: no CWE and no explicit wording",
+        "Read the vendor advisory to decide the type",
     ],
     "error": [
-        "The automatic assessment crashed (see Decision, details in vulnscan.log). Do the full check by hand.",
-        "Open the CVE.org and NVD links and compare the CVSS vector with the criteria; without a vector, "
-        "use the vendor advisory: " + _ASSESS_FROM_ADVISORY,
-        _ASSESS_TYPE,
+        "Automatic assessment failed",
+        "Open CVE.org and NVD, compare the vector with the checklist",
+        "No vector: answer the checklist from the vendor advisory",
     ],
 }
-REVIEW_DECISION = ("Conclusion: all criteria met = treat as SG criteria met and notify L1 with this email. "
-                   "At least one criterion not met = no action.")
+# TO_CHECK, Teams card: one line the L1 can relay to the customer (the full steps are in the email).
+REVIEW_HINT = {
+    "no_vector": "No CVSS score yet: check CVE.org / NVD again, or assess from the vendor advisory",
+    "cvss_v2": "Only CVSS v2: look for a v3 vector on NVD, or assess from the vendor advisory",
+    "unreachable": "CVE.org / NVD unreachable by the script: compare their vector with the SG criteria",
+    "rejected": "CVE rejected on CVE.org: assess the replacement CVE listed in the CISA KEV",
+    "bad_vector": "Incomplete CVSS vector: look for a full v3.x / v4.0 vector on NVD and CVE.org",
+    "type_unknown": "CVSS criteria met, type unknown: confirm RCE or Authentication Bypass from the vendor advisory",
+    "error": "Automatic assessment failed: compare the CVE.org / NVD vector with the SG criteria",
+}
+REVIEW_CHECKLIST = [
+    "AV:N - exploitable over the network",
+    "AC:L - no special condition to exploit",
+    "PR:N - no account or login needed",
+    "UI:N - no user action (click, file to open)",
+    "Impact - High on confidentiality, integrity or availability",
+    "Type - RCE (code / command execution) or Authentication Bypass (access without valid credentials)",
+]
+REVIEW_OUTCOME = [
+    "All criteria met: SG criteria met, handle it as a priority",
+    "One criterion not met (e.g. XSS, path traversal, DoS, info disclosure): no action",
+]
 
 
 def _cve_id(vuln):
@@ -161,16 +167,20 @@ def vuln_view(vuln):
         "facts": facts,
         "criteria": _criteria(a),
         "review": _review(a),
+        "hint": REVIEW_HINT.get(a.get("check"), REVIEW_HINT["error"]) if a.get("status") == "TO_CHECK" else None,
         "links": links,
     }
 
 
 def _review(assessment):
-    """Numbered manual-review steps for TO_CHECK, else []."""
+    """[(section title, [bullets])] for TO_CHECK, else []."""
     if assessment.get("status") != "TO_CHECK":
         return []
-    steps = REVIEW_STEPS.get(assessment.get("check"), REVIEW_STEPS["error"][1:])
-    return [REVIEW_CRITERIA] + steps + [REVIEW_DECISION]
+    check = assessment.get("check")
+    checklist = REVIEW_CHECKLIST[-1:] if check == "type_unknown" else REVIEW_CHECKLIST
+    return [("What to do", REVIEW_STEPS.get(check, REVIEW_STEPS["error"])),
+            ("Checklist", checklist),
+            ("Outcome", REVIEW_OUTCOME)]
 
 
 # ---------- Teams ----------
@@ -193,17 +203,17 @@ def _card_section(vuln, first):
     if v["reason"]:
         items.append({"type": "TextBlock", "text": f"**Decision:** {v['reason']}", "wrap": True,
                       "spacing": "Medium"})
-    if v["review"]:
-        items.append({"type": "TextBlock", "text": "How to review", "weight": "Bolder", "spacing": "Medium"})
-        items += [{"type": "TextBlock", "text": f"{i}. {step}", "wrap": True, "spacing": "Small"}
-                  for i, step in enumerate(v["review"], 1)]
+    if v["hint"]:
+        # The customer (SG) does the review, from the email. The L1 only relays this if asked.
+        items.append({"type": "TextBlock", "wrap": True, "spacing": "Medium",
+                      "text": f"**Review by the customer (steps in the email).** If asked: {v['hint']}."})
     items.append({"type": "ActionSet", "actions": [
         {"type": "Action.OpenUrl", "title": label, "url": url} for label, url in v["links"]]})
     return items
 
 
 def build_card(vulns, type_cve="critical"):
-    """One Adaptive Card. body[0] is the header (teams_only.py prefixes it)."""
+    """One Adaptive Card. body[0] is the header."""
     status = (vulns[0].get("assessment") or {}).get("status") if vulns else None
     title, color = STATUS_STYLE.get(status, STATUS_STYLE[None])[:2]
     if len(vulns) > 1:
@@ -229,7 +239,112 @@ def build_card(vulns, type_cve="critical"):
     }
 
 
+def summary_view(s):
+    """Facts and sections of the daily summary. `s` comes from daily_summary.summarize().
+
+    Sections: [(title, [(cve dict or None, text)])], empty sections removed.
+    """
+    runs = f"{s['runs']} ({s['runs_ok']} OK, {s['runs_failed']} failed)"
+    if s["first"]:
+        runs += f" · {s['first']} → {s['last']}"
+    facts = [
+        ("Script runs", runs),
+        ("Mode", ", ".join(s["modes"]) or "-"),
+        ("CVEs processed", str(len(s["escalated"]) + len(s["not_escalated"]) + len(s["pending"]))),
+        ("Escalated to customer", str(len(s["escalated"]))),
+        ("Not escalated", str(len(s["not_escalated"]))),
+        ("Email failed (retry next run)", str(len(s["pending"]))),
+        ("Postponed (limit)", str(s["postponed"])),
+        ("Teams card failures", str(s["teams_failed"])),
+    ]
+
+    def label(c):
+        status = c.get("status") or "EXPLOITED"
+        return f"{status} - {c['type']}" if c.get("type") else status
+
+    sections = [
+        ("\U0001F6A8 Escalated to customer (email sent)", [(c, label(c)) for c in s["escalated"]]),
+        ("ℹ️ Not escalated", [(c, c.get("reason") or "SG criteria not met") for c in s["not_escalated"]]),
+        ("⚠️ Email failed, will be retried", [(c, label(c)) for c in s["pending"]]),
+        ("❌ Failed runs", [(None, err) for err in s["errors"]]),
+    ]
+    return {
+        "ok": not (s["runs_failed"] or s["pending"]),
+        "facts": facts,
+        "sections": [(title, lines) for title, lines in sections if lines],
+        "empty": not (s["escalated"] or s["not_escalated"] or s["pending"]),
+    }
+
+
+def _summary_line(c, text, bold=lambda x: x, esc=lambda x: x):
+    if c is None:
+        return esc(text)
+    return f"{bold(esc(c['cve']))} · {esc(c.get('vendor') or '')} / {esc(c.get('product') or '')} · {esc(text)}"
+
+
+NO_ENTRY = "No new KEV entry processed today."
+
+
+def build_summary_card(day, s):
+    """Daily summary card. body[0] is the header."""
+    v = summary_view(s)
+    body = [{"type": "TextBlock", "size": "Large", "weight": "Bolder", "wrap": True,
+             "color": "Good" if v["ok"] else "Attention",
+             "text": f"\U0001F4CA Daily summary - KEV watch - {day}"},
+            {"type": "FactSet", "facts": [{"title": t, "value": val} for t, val in v["facts"]]}]
+    for title, lines in v["sections"]:
+        body.append({"type": "TextBlock", "text": title, "weight": "Bolder", "spacing": "Medium"})
+        body.append({"type": "TextBlock", "wrap": True, "spacing": "Small", "text": "\n".join(
+            "- " + _summary_line(c, t, lambda x: f"**{x}**") for c, t in lines)})
+    if v["empty"]:
+        body.append({"type": "TextBlock", "text": NO_ENTRY, "spacing": "Medium"})
+    body.append({"type": "TextBlock", "text": f"\U0001F7E7 **{BRAND}** | {TEAM}", "size": "Small",
+                 "isSubtle": True, "separator": True, "spacing": "Medium"})
+    return {
+        "type": "message",
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "msteams": {"width": "Full"},
+                "body": body,
+            },
+        }],
+    }
+
+
 # ---------- Email ----------
+
+TD = f'style="padding:8px 0;border-bottom:1px solid {LINE};vertical-align:top;font-size:14px"'
+TH = f'style="padding:8px 16px 8px 0;border-bottom:1px solid {LINE};vertical-align:top;font-size:14px;color:{GREY};white-space:nowrap"'
+H2 = f'style="margin:28px 0 8px;font-size:16px;font-weight:bold;color:{BLACK};border-left:4px solid {ORANGE};padding-left:8px"'
+
+
+def _page(hero, content, footer):
+    """Orange Cyberdefense email page: black header, `hero` (title block), `content`, black footer."""
+    return f"""<!doctype html>
+<html><body style="margin:0;padding:0;background:#EEEEEE">
+<table width="100%" cellspacing="0" cellpadding="0" style="background:#EEEEEE"><tr><td align="center" style="padding:24px 10px">
+<table width="640" cellspacing="0" cellpadding="0" style="max-width:640px;width:100%;background:#FFFFFF;font-family:{FONT};color:{BLACK}">
+<tr><td style="background:{BLACK};padding:18px 28px">
+<table cellspacing="0" cellpadding="0" width="100%"><tr>
+<td width="44" valign="bottom"><div style="width:44px;height:44px;background:{ORANGE};position:relative">
+<span style="display:block;padding-top:27px;padding-left:5px;font-size:10px;font-weight:bold;color:#FFFFFF;line-height:10px">orange</span></div></td>
+<td style="padding-left:14px;color:#FFFFFF;font-size:18px;font-weight:bold;line-height:22px" valign="bottom">{BRAND}<br>
+<span style="font-size:12px;font-weight:normal;color:{LINE}">{TEAM}</span></td>
+</tr></table></td></tr>
+<tr><td style="height:4px;background:{ORANGE};font-size:0;line-height:0">&nbsp;</td></tr>
+<tr><td style="padding:28px 28px 8px">
+{hero}</td></tr>
+<tr><td style="padding:12px 28px 28px;font-size:14px;line-height:1.5">
+{content}</td></tr>
+<tr><td style="background:{BLACK};padding:20px 28px;font-size:12px;line-height:1.6;color:{LINE};white-space:pre-line">{footer}</td></tr>
+<tr><td style="background:{BLACK};padding:0 28px 20px;font-size:12px;color:#FFFFFF"><b style="color:{ORANGE}">{BRAND}</b> &middot; {TEAM}</td></tr>
+</table></td></tr></table>
+</body></html>"""
+
 
 def render_mail(vuln, intro, footer):
     """(plain text, HTML) bodies for one CVE. `intro` says why the reader gets it."""
@@ -246,30 +361,31 @@ def render_mail(vuln, intro, footer):
     if v["reason"]:
         text += ["", f"Decision: {v['reason']}"]
     if v["review"]:
-        text += ["", "How to review:"] + [f"  {i}. {step}" for i, step in enumerate(v["review"], 1)]
+        text += ["", "How to review:"]
+        for title, bullets in v["review"]:
+            text += [f"  {title}:"] + [f"    - {b}" for b in bullets]
     text +=["", "Links:"] + [f"  {lbl}: {url}" for lbl, url in v["links"]] + ["", footer]
 
     e = escape
-    td = f'style="padding:8px 0;border-bottom:1px solid {LINE};vertical-align:top;font-size:14px"'
-    th = f'style="padding:8px 16px 8px 0;border-bottom:1px solid {LINE};vertical-align:top;font-size:14px;color:{GREY};white-space:nowrap"'
-    h2 = f'style="margin:28px 0 8px;font-size:16px;font-weight:bold;color:{BLACK};border-left:4px solid {ORANGE};padding-left:8px"'
-    facts = "".join(f"<tr><td {th}>{e(t)}</td><td {td}>{e(val)}</td></tr>" for t, val in v["facts"])
+    facts = "".join(f"<tr><td {TH}>{e(t)}</td><td {TD}>{e(val)}</td></tr>" for t, val in v["facts"])
     criteria = ""
     if v["criteria"]:
         rows = "".join(
-            f"<tr><td {th}>{e(lbl)}</td><td {td}>{e(val)}</td>"
-            f'<td {td} align="right"><b style="color:{GREEN if ok else RED};font-size:16px">'
+            f"<tr><td {TH}>{e(lbl)}</td><td {TD}>{e(val)}</td>"
+            f'<td {TD} align="right"><b style="color:{GREEN if ok else RED};font-size:16px">'
             f'{"&#10004;" if ok else "&#10008;"}</b></td></tr>'
             for lbl, val, ok in v["criteria"])
-        criteria = (f"<h2 {h2}>SG criteria</h2>"
+        criteria = (f"<h2 {H2}>SG criteria</h2>"
                     f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">{rows}</table>')
     reason = (f'<p style="margin:20px 0 0;padding:12px 14px;background:{LIGHT};border-left:4px solid {tag_bg};font-size:14px">'
               f'<b>Decision:</b> {e(v["reason"])}</p>') if v["reason"] else ""
     review = ""
     if v["review"]:
-        steps = "".join(f'<li style="margin:0 0 8px">{e(step)}</li>' for step in v["review"])
-        review = (f"<h2 {h2}>How to review</h2>"
-                  f'<ol style="margin:0;padding-left:22px;font-size:14px;line-height:1.5">{steps}</ol>')
+        review = f"<h2 {H2}>How to review</h2>" + "".join(
+            f'<p style="margin:12px 0 4px;font-size:14px;font-weight:bold">{e(title)}</p>'
+            f'<ul style="margin:0;padding-left:20px;font-size:14px;line-height:1.5">'
+            + "".join(f'<li style="margin:0 0 4px">{e(b)}</li>' for b in bullets) + "</ul>"
+            for title, bullets in v["review"])
     links = "".join(
         f'<a href="{e(url)}" style="display:inline-block;margin:0 8px 8px 0;padding:9px 16px;font-size:14px;'
         f'font-weight:bold;text-decoration:none;'
@@ -277,36 +393,49 @@ def render_mail(vuln, intro, footer):
            else f'background:#FFFFFF;color:{BLACK};border:2px solid {BLACK}')
         + f'">{e(lbl)}</a>'
         for i, (lbl, url) in enumerate(v["links"]))
-    html = f"""<!doctype html>
-<html><body style="margin:0;padding:0;background:#EEEEEE">
-<table width="100%" cellspacing="0" cellpadding="0" style="background:#EEEEEE"><tr><td align="center" style="padding:24px 10px">
-<table width="640" cellspacing="0" cellpadding="0" style="max-width:640px;width:100%;background:#FFFFFF;font-family:{FONT};color:{BLACK}">
-<tr><td style="background:{BLACK};padding:18px 28px">
-<table cellspacing="0" cellpadding="0" width="100%"><tr>
-<td width="44" valign="bottom"><div style="width:44px;height:44px;background:{ORANGE};position:relative">
-<span style="display:block;padding-top:27px;padding-left:5px;font-size:10px;font-weight:bold;color:#FFFFFF;line-height:10px">orange</span></div></td>
-<td style="padding-left:14px;color:#FFFFFF;font-size:18px;font-weight:bold;line-height:22px" valign="bottom">{BRAND}<br>
-<span style="font-size:12px;font-weight:normal;color:{LINE}">{TEAM}</span></td>
-</tr></table></td></tr>
-<tr><td style="height:4px;background:{ORANGE};font-size:0;line-height:0">&nbsp;</td></tr>
-<tr><td style="padding:28px 28px 8px">
-<span style="display:inline-block;background:{tag_bg};color:{tag_fg};font-size:12px;font-weight:bold;letter-spacing:1px;padding:5px 10px">{e(label)}</span>
+    hero = f"""<span style="display:inline-block;background:{tag_bg};color:{tag_fg};font-size:12px;font-weight:bold;letter-spacing:1px;padding:5px 10px">{e(label)}</span>
 <span style="display:inline-block;color:{GREY};font-size:12px;font-weight:bold;letter-spacing:1px;padding:5px 0 5px 8px">CISA KEV</span>
 <div style="font-size:30px;font-weight:bold;margin-top:14px;line-height:34px">{e(v["cid"])}</div>
 <div style="font-size:17px;font-weight:bold;margin-top:6px;line-height:22px">{e(v["name"])}</div>
-</td></tr>
-<tr><td style="padding:12px 28px 28px;font-size:14px;line-height:1.5">
-<p style="margin:0 0 12px">{e(intro)}</p>
+"""
+    content = f"""<p style="margin:0 0 12px">{e(intro)}</p>
 <p style="margin:0 0 8px;color:{GREY}">{e(v["description"])}</p>
-<h2 {h2}>Details</h2>
+<h2 {H2}>Details</h2>
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">{facts}</table>
 {criteria}
 {reason}
 {review}
 <div style="margin-top:24px">{links}</div>
-</td></tr>
-<tr><td style="background:{BLACK};padding:20px 28px;font-size:12px;line-height:1.6;color:{LINE};white-space:pre-line">{e(footer)}</td></tr>
-<tr><td style="background:{BLACK};padding:0 28px 20px;font-size:12px;color:#FFFFFF"><b style="color:{ORANGE}">{BRAND}</b> &middot; {TEAM}</td></tr>
-</table></td></tr></table>
-</body></html>"""
+"""
+    html = _page(hero, content, e(footer))
     return "\n".join(text), html
+
+
+def render_summary_mail(day, s):
+    """(plain text, HTML) bodies of the daily summary email."""
+    v = summary_view(s)
+    text = [f"{BRAND} | {TEAM}", "", f"Daily summary - KEV watch - {day}", ""]
+    text += [f"{t}: {val}" for t, val in v["facts"]]
+    for title, lines in v["sections"]:
+        text += ["", title] + ["  - " + _summary_line(c, t) for c, t in lines]
+    if v["empty"]:
+        text += ["", NO_ENTRY]
+
+    e = escape
+    tag_bg, tag_fg, label = (GREEN, "#FFFFFF", "ALL OK") if v["ok"] else (RED, "#FFFFFF", "ACTION NEEDED")
+    hero = (f'<span style="display:inline-block;background:{tag_bg};color:{tag_fg};font-size:12px;font-weight:bold;'
+            f'letter-spacing:1px;padding:5px 10px">{label}</span>'
+            f'<span style="display:inline-block;color:{GREY};font-size:12px;font-weight:bold;letter-spacing:1px;'
+            f'padding:5px 0 5px 8px">CISA KEV</span>\n'
+            f'<div style="font-size:30px;font-weight:bold;margin-top:14px;line-height:34px">Daily summary</div>\n'
+            f'<div style="font-size:17px;font-weight:bold;margin-top:6px;line-height:22px">{e(day)}</div>\n')
+    facts = "".join(f"<tr><td {TH}>{e(t)}</td><td {TD}>{e(val)}</td></tr>" for t, val in v["facts"])
+    content = f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">{facts}</table>'
+    for title, lines in v["sections"]:
+        content += (f"<h2 {H2}>{e(title)}</h2>"
+                    f'<ul style="margin:0;padding-left:20px;font-size:14px;line-height:1.5">'
+                    + "".join(f'<li style="margin:0 0 4px">{_summary_line(c, t, lambda x: f"<b>{x}</b>", e)}</li>'
+                              for c, t in lines) + "</ul>")
+    if v["empty"]:
+        content += f'<p style="margin:20px 0 0">{NO_ENTRY}</p>'
+    return "\n".join(text), _page(hero, content, "Internal daily summary, not sent to the customer.")
