@@ -1,0 +1,23 @@
+# Secrets: never commit the Teams webhook
+.teams_webhook
+.env
+
+# Runtime state and logs (live on the server only)
+alerted_cves.json
+previous_run.json
+*.json.tmp
+*.log
+
+# SG product scope (client data)
+produit_clean.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
