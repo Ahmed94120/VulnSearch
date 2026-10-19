@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 TMP=$(mktemp -d)
+export VULNSG_ENV_FILE=/dev/null   # ignore the developer .env
 trap 'rm -rf "$TMP"' EXIT
 
 run() {

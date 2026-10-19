@@ -13,6 +13,7 @@ assess() returns one of three statuses:
 Sources, in this order: CVE.org (CNA, then ADP e.g. CISA-ADP), then NVD.
 CVEfeed.io is not queried: no documented public API was found.
 """
+import config  # noqa: F401  (loads .env before any os.environ read)
 import logging
 import os
 import re

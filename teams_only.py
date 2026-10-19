@@ -11,6 +11,7 @@ is not affected and will not consider these CVEs as alerted (or not) because
 of this script.
 """
 import argparse
+import config  # noqa: F401  (loads .env)
 import sys
 import time
 

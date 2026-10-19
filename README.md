@@ -13,13 +13,22 @@ Le script tourne toutes les heures en cron sur `p-tvm-ctl-l-01`, depuis `/home/s
 | `vulnScore.py` | Critères SG : sous-scores CVSS et type RCE / contournement d'authentification, depuis CVE.org puis NVD. |
 | `vulnExploit.py` | Enrichissement KEV / Metasploit / Exploit-DB. N'est plus appelé par le cron. |
 | `teams_only.py` | Poste des cartes Teams sur une période, sans mail ni modification de l'état. |
+| `config.py` | Charge le `.env` au démarrage. |
 | `tests/` | Tests hors ligne : réseau, SMTP et Teams simulés. |
 
 ## Configuration
 
+La configuration se met dans un fichier `.env` à côté des scripts, jamais commité. Pars de `.env.example` :
+
+```bash
+cp .env.example .env && chmod 600 .env
+```
+
+`config.py` charge ce fichier au démarrage, sans dépendance. Une variable déjà définie dans l'environnement (crontab, shell) garde la priorité sur le `.env`.
+
 | Variable | Défaut | Effet |
 |---|---|---|
-| `TEAMS_WEBHOOK_URL` | (vide) | URL du webhook Power Automate. Sinon, le script lit `.teams_webhook` (chmod 600). |
+| `TEAMS_WEBHOOK_URL` | (vide) | URL du webhook Power Automate. À défaut, le script lit `.teams_webhook`. |
 | `NOTIFY_MODE` | `all` | `all` : un mail par nouvelle entrée KEV. `filtered` : critères SG (voir plus bas). |
 | `L1_EMAILS` | (vide) | Destinataires des alertes `MATCH`, séparés par des virgules. Obligatoire en mode `filtered`. |
 | `REVIEW_EMAILS` | (vide) | Destinataires des revues manuelles `TO_CHECK`. Obligatoire en mode `filtered`. |
@@ -27,6 +36,7 @@ Le script tourne toutes les heures en cron sur `p-tvm-ctl-l-01`, depuis `/home/s
 | `DRY_RUN` | (vide) | `1` : affiche ce qui serait envoyé, n'envoie rien et n'écrit aucun état. |
 | `VULNSG_DIR` | `/home/sysroot/VulnSG` | Dossier des logs et des fichiers d'état. |
 | `VULN_STATE_FILE` | `$VULNSG_DIR/alerted_cves.json` | Historique des CVE déjà traitées. |
+| `VULNSG_ENV_FILE` | `.env` à côté des scripts | Fichier de configuration à charger. |
 
 Le serveur sort par le proxy `http://172.18.9.100:8080`, déjà déclaré dans la crontab. En shell interactif, il faut l'exporter (`export HTTPS_PROXY=...`).
 
@@ -56,7 +66,7 @@ Toutes les entrées gardent une carte Teams interne avec leur statut. Le type es
 cd /home/sysroot/VulnSG
 mkdir -p bak && cp *.py previous_run.json alerted_cves.json bak/
 # copier les fichiers .py du dépôt ici
-echo 'URL_DU_WEBHOOK' > .teams_webhook && chmod 600 .teams_webhook
+cp .env.example .env && chmod 600 .env     # puis renseigner TEAMS_WEBHOOK_URL
 export HTTPS_PROXY=http://172.18.9.100:8080
 DRY_RUN=1 python3 vulnAlert.py        # test à blanc
 ```

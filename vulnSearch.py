@@ -1,3 +1,4 @@
+import config  # noqa: F401  (loads .env before any os.environ read)
 import csv
 import logging
 import os
