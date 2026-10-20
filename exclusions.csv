@@ -1,0 +1,16 @@
+# Liste d'exclusion du client : produits pour lesquels il ne veut pas recevoir d'alerte.
+# Vide par défaut : toutes les nouvelles entrées du KEV sont alertées.
+#
+# Une ligne par produit :   vendor;product;commentaire
+#   - vendor et product : tels qu'écrits dans le CISA KEV (champs vendorProject et product).
+#     Majuscules et espaces ne comptent pas.
+#   - product = *       : tous les produits de ce vendor.
+#   - commentaire       : facultatif (qui l'a demandé, quand, référence du mail).
+#
+# Un produit exclu ne déclenche aucun mail au client. Il garde une carte Teams interne
+# et apparaît dans le récap du soir, dans « Not escalated ».
+# Lignes commençant par # ignorées. Fichier illisible ou mal formé : aucune exclusion.
+#
+# Exemples (à décommenter) :
+# Microsoft;Internet Explorer;demande SG du JJ/MM/AAAA
+# Apple;*;hors périmètre SG, demande du JJ/MM/AAAA

@@ -4,6 +4,8 @@ Implements the SG criteria (feasibility request, 19/10/2026):
   - AV:N, AC:L, PR:N, UI:N
   - at least one of C / I / A = High   (CVSS 4.0: VC / VI / VA)
   - vulnerability type is RCE or Authentication Bypass
+    DISABLED by default (20/10/2026): set SG_TYPE_FILTER=1 to apply it.
+    When disabled, the type is still detected and shown, for information only.
 
 assess() returns one of three statuses:
   MATCH     all criteria met                               -> email
@@ -26,6 +28,8 @@ logger = logging.getLogger(__name__)
 URL_CVE_ORG = "https://cveawg.mitre.org/api/cve/{cve_id}"
 URL_NVD = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_API_KEY = os.environ.get("NVD_API_KEY")
+# Type criterion (RCE / Authentication Bypass): off unless SG_TYPE_FILTER=1.
+TYPE_FILTER = os.environ.get("SG_TYPE_FILTER", "0").strip() == "1"
 # NVD without a key: 5 requests / 30 s. With a key: 50 / 30 s.
 NVD_MIN_INTERVAL = 0.7 if NVD_API_KEY else 6.5
 
@@ -214,7 +218,8 @@ class Scorer:
         """Assess one KEV entry. Never raises: any problem gives TO_CHECK."""
         cve_id = kev_entry.get("cveID")
         result = {"status": "TO_CHECK", "reason": None, "vector": None, "source": None,
-                  "type": None, "type_evidence": None, "cwes": [], "check": None}
+                  "type": None, "type_evidence": None, "cwes": [], "check": None,
+                  "type_filter": TYPE_FILTER}
         try:
             return self._assess(cve_id, kev_entry, result)
         except Exception as e:
@@ -287,6 +292,11 @@ class Scorer:
 
         vtype, evidence, informative = self.classify_type(all_cwes, texts)
         result["cwes"] = sorted(informative)
+        if not TYPE_FILTER:
+            # Type criterion disabled: the CVSS criteria decide alone, the type is informative.
+            result.update(status="MATCH", type=vtype, type_evidence=evidence,
+                          reason="CVSS criteria met" + (f" (type: {vtype}, {evidence})" if vtype else ""))
+            return result
         if vtype:
             result.update(status="MATCH", type=vtype, type_evidence=evidence,
                           reason=f"CVSS criteria met, {vtype} ({evidence})")

@@ -10,6 +10,7 @@ Le script tourne toutes les heures en cron sur `p-tvm-ctl-l-01`, depuis `/home/s
 - [Fonctionnement d'un run](#fonctionnement-dun-run)
 - [Sélection des entrées et repère](#sélection-des-entrées-et-repère)
 - [Quand une CVE est-elle considérée comme traitée ?](#quand-une-cve-est-elle-considérée-comme-traitée-)
+- [Liste d'exclusion du client](#liste-dexclusion-du-client)
 - [Mode `filtered` (critères SG)](#mode-filtered-critères-sg)
 - [Récap du soir](#récap-du-soir)
 - [Fichiers sur le serveur](#fichiers-sur-le-serveur)
@@ -28,6 +29,7 @@ flowchart LR
     subgraph SRV["p-tvm-ctl-l-01 · /home/sysroot/VulnSG"]
         CRON["cron<br/>toutes les heures"] --> ALERT["vulnAlert.py"]
         CRON2["cron<br/>23h55"] --> SUM["daily_summary.py"]
+        EXCL[("exclusions.csv<br/>liste du client")] --> ALERT
         ALERT --> STATE[("previous_run.json<br/>alerted_cves.json<br/>runs.jsonl")]
         STATE --> SUM
     end
@@ -50,7 +52,8 @@ Tout le trafic HTTPS sort par le proxy `http://172.18.9.100:8080`, déclaré dan
 |---|---|
 | `vulnAlert.py` | Point d'entrée du cron. Vérifie la configuration, envoie les mails et les cartes Teams, tient l'historique des alertes et le journal des runs. |
 | `vulnSearch.py` | Récupère le KEV et sélectionne les entrées depuis le dernier passage, par date. |
-| `vulnScore.py` | Critères SG : sous-scores CVSS et type RCE / contournement d'authentification, depuis CVE.org puis NVD. |
+| `vulnScore.py` | Critères SG : sous-scores CVSS depuis CVE.org puis NVD. Le critère de type (RCE / contournement d'authentification) existe mais est désactivé. |
+| `exclusions.csv` | Liste d'exclusion du client : produits pour lesquels il ne veut pas d'alerte. Vide par défaut. |
 | `render.py` | Contenu des cartes Teams et des mails (HTML + texte). Aucun accès réseau. |
 | `daily_summary.py` | Récap de la journée : une carte Teams et un mail aux seuls `CC_EMAILS`, jamais au client. Lit `runs.jsonl`. |
 | `vulnExploit.py` | Enrichissement Metasploit / Exploit-DB. N'est pas appelé par le cron. |
@@ -89,6 +92,8 @@ cp .env.example .env && chmod 600 .env
 | `SMTP_USER` / `SMTP_PASSWORD` | non | Si renseignés : STARTTLS + authentification. Inutile avec le relais interne. |
 | `CUSTOMER_EMAILS` | oui | Destinataire (To) de toutes les alertes, séparés par des virgules. |
 | `CC_EMAILS` | non | En copie (Cc) de toutes les alertes, et destinataires du récap du soir. |
+| `SG_TYPE_FILTER` | non (`0`) | Mode `filtered` : `1` ajoute le critère de type RCE / contournement d'authentification. Désactivé par défaut. |
+| `EXCLUSIONS_FILE` | non | Liste d'exclusion. Défaut : `$VULNSG_DIR/exclusions.csv`. |
 | `NVD_API_KEY` | non | Clé NVD : 50 requêtes / 30 s au lieu de 5. |
 | `DRY_RUN` | non | `1` : affiche ce qui serait envoyé, n'envoie rien et n'écrit aucun état. |
 | `VULNSG_DIR` | non | Dossier des logs et des fichiers d'état. Défaut : `/home/sysroot/VulnSG` s'il existe, sinon le dossier des scripts. |
@@ -104,7 +109,7 @@ Avant même de lire le KEV, `vulnAlert.py` vérifie le `.env`. Sans ce contrôle
 | `SMTP_HOST`, `SMTP_HELLO`, `SMTP_FROM` ou `CUSTOMER_EMAILS` vide | Run refusé |
 | `SMTP_PORT` non numérique (vide = `25`) | Run refusé |
 | `SMTP_USER` sans `SMTP_PASSWORD` | Run refusé |
-| `NOTIFY_MODE` autre que `all` / `filtered` | Run refusé |
+| `NOTIFY_MODE` autre que `all` / `filtered`, `SG_TYPE_FILTER` autre que `0` / `1` | Run refusé |
 | Mode `filtered` sans webhook Teams | Run refusé (les `NO_MATCH` ne vont que sur Teams) |
 | `MAIL_TEST_TO` ou `MAIL_EML_DIR` présent (anciens réglages de test) | Run refusé : avec eux, le client ne recevrait jamais les mails |
 | Pas de webhook en mode `all` | Avertissement dans le log, mails seuls |
@@ -122,13 +127,16 @@ flowchart TD
     D --> E["Retirer celles déjà dans<br/>alerted_cves.json"]
     E --> F{"Plus de 10 ?"}
     F -- oui --> F1["Garder les 10 plus récentes<br/>le reste au run suivant"]
-    F -- non --> G
-    F1 --> G{"NOTIFY_MODE"}
+    F -- non --> X
+    F1 --> X{"Produit dans<br/>exclusions.csv ?"}
+    X -- oui --> XE["EXCLUDED<br/>pas de mail"]
+    X -- non --> G{"NOTIFY_MODE"}
     G -- all --> H["Mail client pour chaque CVE"]
     G -- filtered --> I["vulnScore : MATCH / TO_CHECK / NO_MATCH"]
     I --> J["MATCH, TO_CHECK : mail client<br/>NO_MATCH : pas de mail"]
     H --> K["Carte Teams"]
     J --> K
+    XE --> K
     K --> L["Enregistrer alerted_cves.json"]
     L --> M["Avancer le repère<br/>jamais au-delà d'une CVE en attente"]
     M --> N["Ajouter une ligne à runs.jsonl"]
@@ -152,6 +160,7 @@ sequenceDiagram
     CISA-->>VA: catalogue complet
     VA->>VA: sélection par date, dédoublonnage, limite 10
     loop pour chaque CVE retenue
+        Note over VA: produit exclu : ni scoring ni mail, carte seule
         opt NOTIFY_MODE=filtered
             VA->>SC: fiche CVE.org puis NVD
             SC-->>VA: vecteur CVSS, CWE, description
@@ -205,30 +214,71 @@ stateDiagram-v2
     [*] --> Nouvelle: dans la fenêtre, absente de alerted_cves.json
     Nouvelle --> MailEnvoye: mail accepté par le relais
     Nouvelle --> EnAttente: mail en échec
-    Nouvelle --> CarteNoMatch: NO_MATCH, carte Teams acceptée
-    Nouvelle --> EnAttente: NO_MATCH, carte Teams en échec
+    Nouvelle --> CarteSeule: NO_MATCH ou EXCLUDED, carte Teams acceptée
+    Nouvelle --> EnAttente: NO_MATCH ou EXCLUDED, carte Teams en échec
     EnAttente --> Nouvelle: run suivant (le repère ne la dépasse pas)
     MailEnvoye --> Traitee: carte Teams envoyée ou non
-    CarteNoMatch --> Traitee
+    CarteSeule --> Traitee
     Traitee --> [*]: enregistrée dans alerted_cves.json
 ```
 
 - Un mail parti n'est **jamais renvoyé**, même si la carte Teams qui suit échoue : on évite les doublons chez le client.
 - Un mail en échec est **retenté** au run suivant. Le repère reste à sa date, pour qu'elle reste dans la fenêtre.
-- Un `NO_MATCH` n'a pas de mail : sa carte Teams est sa seule trace. Il n'est enregistré qu'une fois la carte acceptée.
+- Un `NO_MATCH` ou un produit exclu (`EXCLUDED`) n'a pas de mail : sa carte Teams est sa seule trace. Il n'est enregistré qu'une fois la carte acceptée (sans webhook configuré, possible en mode `all`, il est enregistré directement).
+
+## Liste d'exclusion du client
+
+Le client peut nous communiquer des produits pour lesquels il ne veut pas recevoir d'alerte. Ils vont dans `exclusions.csv`, à côté des fichiers d'état, livré vide. La liste s'applique dans les deux modes, avant toute autre décision.
+
+```text
+# vendor;product;commentaire
+Microsoft;Internet Explorer;demande SG du 20/10/2026
+Apple;*;hors périmètre SG
+```
+
+| Règle | Détail |
+|---|---|
+| Noms | Tels qu'écrits dans le CISA KEV, champs `vendorProject` et `product`. Majuscules et espaces ne comptent pas. |
+| `*` en produit | Tous les produits de ce vendor. |
+| Commentaire | Facultatif : qui l'a demandé, quand. Il est repris dans la carte Teams et le récap. |
+| Lignes `#` | Ignorées. |
+| Ligne mal formée | Ignorée, avec un avertissement dans `vulnscan.log`. |
+| Fichier absent ou illisible | Aucune exclusion : tout est alerté. Une erreur sur ce fichier ne masque jamais une alerte. |
+
+Une CVE d'un produit exclu prend le statut `EXCLUDED` :
+
+- **pas de mail au client** ;
+- **pas d'appel à CVE.org / NVD** ;
+- une **carte Teams interne** grise, « product excluded by the customer », avec la règle appliquée ;
+- elle apparaît dans le **récap du soir**, rubrique « Not escalated », avec la raison.
+
+Pour retrouver le nom exact d'un produit dans le KEV, sur le serveur :
+
+```bash
+python3 -c "
+import json, urllib.request
+kev = json.load(urllib.request.urlopen('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'))
+for vp in sorted({(v['vendorProject'], v['product']) for v in kev['vulnerabilities']}):
+    print(';'.join(vp))
+" | grep -i 'internet explorer'
+```
+
+La liste est lue à chaque run : une modification prend effet au run suivant, sans redémarrage. Elle ne s'applique qu'aux nouvelles entrées : une CVE déjà alertée n'est pas concernée.
 
 ## Mode `filtered` (critères SG)
 
-Étude de faisabilité, désactivée par défaut (`NOTIFY_MODE=all`). Pour chaque nouvelle entrée, `vulnScore.py` évalue :
+Étude de faisabilité, désactivée par défaut (`NOTIFY_MODE=all`). Pour chaque nouvelle entrée non exclue, `vulnScore.py` évalue :
 
-| Critère | Valeur attendue |
-|---|---|
-| `AV` Attack vector | `N` (réseau) |
-| `AC` Attack complexity | `L` (faible) |
-| `PR` Privileges required | `N` (aucun) |
-| `UI` User interaction | `N` (aucune) |
-| Impact | au moins un de `C` / `I` / `A` à `H` (CVSS 4.0 : `VC` / `VI` / `VA`) |
-| Type | RCE ou contournement d'authentification |
+| Critère | Valeur attendue | Actif |
+|---|---|---|
+| `AV` Attack vector | `N` (réseau) | oui |
+| `AC` Attack complexity | `L` (faible) | oui |
+| `PR` Privileges required | `N` (aucun) | oui |
+| `UI` User interaction | `N` (aucune) | oui |
+| Impact | au moins un de `C` / `I` / `A` à `H` (CVSS 4.0 : `VC` / `VI` / `VA`) | oui |
+| Type | RCE ou contournement d'authentification | **non**, sauf `SG_TYPE_FILTER=1` |
+
+**Critère de type désactivé (20/10/2026).** Le type ne fait pas partie du score CVSS : il est déduit des CWE et de la description, ce qui reste approximatif (une faille mémoire CWE-787 qui permet une exécution de code serait écartée). Par défaut, les critères CVSS décident donc seuls. Le type détecté reste affiché dans la carte et le mail, à titre d'information (« Detected type (info) »). Le code est conservé : `SG_TYPE_FILTER=1` le réactive, avec la liste de CWE plus bas.
 
 ```mermaid
 flowchart TD
@@ -243,7 +293,9 @@ flowchart TD
     P -- non --> TC5["TO_CHECK<br/>bad_vector"]
     P -- oui --> Q{"AV:N, AC:L, PR:N, UI:N<br/>et un impact High ?"}
     Q -- non --> NM1["NO_MATCH"]
-    Q -- oui --> T{"Type : CWE,<br/>puis description"}
+    Q -- oui --> F{"SG_TYPE_FILTER=1 ?"}
+    F -- "non (défaut)" --> M0["MATCH<br/>type affiché pour info"]
+    F -- oui --> T{"Type : CWE,<br/>puis description"}
     T -- "RCE ou auth bypass" --> M["MATCH"]
     T -- "autre CWE" --> NM2["NO_MATCH"]
     T -- "ni CWE ni mot-clé" --> TC6["TO_CHECK<br/>type_unknown"]
@@ -254,10 +306,11 @@ flowchart TD
 | `MATCH` | Mail au client (`CUSTOMER_EMAILS`), équipe et L1 en CC (`CC_EMAILS`), carte Teams |
 | `TO_CHECK` | Mail au client, équipe et L1 en CC, avec la raison et les étapes de vérification. Le client vérifie lui-même, le L1 appelle seulement. Carte Teams. |
 | `NO_MATCH` | Pas de mail, carte Teams seulement |
+| `EXCLUDED` | Produit de la liste d'exclusion : pas de mail, carte Teams seulement (dans les deux modes) |
 
 En cas de doute (source injoignable, données manquantes, erreur), le résultat est toujours `TO_CHECK`, jamais un silence.
 
-Type de vulnérabilité, déduit des CWE puis de la description. C'est une heuristique, à valider avec SG :
+Type de vulnérabilité, déduit des CWE puis de la description. Utilisé pour décider seulement avec `SG_TYPE_FILTER=1`. C'est une heuristique, à valider avec SG avant de la réactiver :
 
 | Type | CWE | Mots-clés de secours dans la description |
 |---|---|---|
@@ -285,6 +338,7 @@ La carte est verte si tout va bien, rouge s'il y a un run en échec ou un mail e
 |---|---|---|
 | `.env` | Configuration (chmod 600) | à la main |
 | `.teams_webhook` | Webhook, si absent du `.env` (chmod 600) | à la main |
+| `exclusions.csv` | Liste d'exclusion du client | à la main, sur demande du client |
 | `previous_run.json` | Repère : `date_added` et heure du dernier run | `vulnAlert.py`, après les envois |
 | `alerted_cves.json` | Liste des CVE déjà traitées | `vulnAlert.py`, écriture atomique |
 | `runs.jsonl` | Journal : une ligne JSON par run | `vulnAlert.py` (hors `DRY_RUN`) |
@@ -293,7 +347,7 @@ La carte est verte si tout va bien, rouge s'il y a un run en échec ou un mail e
 
 ## Déploiement sur `p-tvm-ctl-l-01`
 
-Fichiers à copier : `vulnAlert.py`, `vulnSearch.py`, `vulnScore.py`, `render.py`, `daily_summary.py`, `vulnExploit.py`, `config.py`, `requirements.txt`, `.env.example`.
+Fichiers à copier : `vulnAlert.py`, `vulnSearch.py`, `vulnScore.py`, `render.py`, `daily_summary.py`, `vulnExploit.py`, `config.py`, `requirements.txt`, `.env.example`, `exclusions.csv`.
 
 ```mermaid
 flowchart LR
@@ -310,7 +364,7 @@ flowchart LR
 
    ```bash
    scp vulnAlert.py vulnSearch.py vulnScore.py render.py daily_summary.py vulnExploit.py \
-       config.py requirements.txt .env.example <utilisateur>@p-tvm-ctl-l-01:/home/sysroot/VulnSG/incoming/
+       config.py requirements.txt .env.example exclusions.csv <utilisateur>@p-tvm-ctl-l-01:/home/sysroot/VulnSG/incoming/
    ```
 
 2. Sur le serveur, sauvegarder l'existant :
@@ -325,6 +379,7 @@ flowchart LR
 
    ```bash
    cp incoming/*.py incoming/requirements.txt incoming/.env.example .
+   [ -f exclusions.csv ] || cp incoming/exclusions.csv .   # jamais écraser la liste du client
    ```
 
 4. Créer le `.env` (une seule fois) et le compléter : `CUSTOMER_EMAILS`, `CC_EMAILS`, et `TEAMS_WEBHOOK_URL` ou le fichier `.teams_webhook`.
@@ -378,6 +433,8 @@ Le `previous_run.json` restauré est indispensable. Le nouveau script n'y écrit
 | Erreur réseau sur `cisa.gov` | Proxy non exporté en shell interactif | `export HTTPS_PROXY=http://172.18.9.100:8080` |
 | Run long en mode `filtered` | Limite NVD sans clé (6,5 s par appel) | Renseigner `NVD_API_KEY` |
 | `entries postponed to next run` | Plus de 10 nouvelles CVE d'un coup | Normal, elles partent aux runs suivants |
+| Une CVE d'un produit exclu reçoit quand même un mail | Nom différent de celui du KEV | Comparer avec `vendorProject` / `product` du KEV (voir « Liste d'exclusion ») |
+| `exclusion list ... line N ignored` | Ligne sans `;` ou vendor / product vide | Corriger la ligne dans `exclusions.csv` |
 
 ## Commandes utiles
 
@@ -392,6 +449,9 @@ python3 daily_summary.py --date 2026-10-19
 
 # Dernier run, lisible
 tail -1 runs.jsonl | python3 -m json.tool
+
+# Règles d'exclusion lues
+python3 -c "import vulnAlert; [print(r['label'], '|', r['comment']) for r in vulnAlert.load_exclusions()]"
 
 # CVE déjà traitées
 python3 -c "import json; print(len(json.load(open('alerted_cves.json'))), 'CVE')"

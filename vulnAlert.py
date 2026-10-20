@@ -8,6 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import smtplib
 import ssl
+from pathlib import Path
 
 from render import build_card, render_mail
 
@@ -30,6 +31,8 @@ JOURNAL_FILE = BASE_DIR / "runs.jsonl"
 WEBHOOK_FILE = BASE_DIR / ".teams_webhook"
 # DRY_RUN=1: log and print what would be sent, send nothing, save no state.
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
+# Products the customer does not want to be alerted about (see load_exclusions()).
+EXCLUSIONS_FILE = Path(os.environ.get("EXCLUSIONS_FILE") or BASE_DIR / "exclusions.csv").expanduser()
 
 # NOTIFY_MODE=all       (default, current behaviour) every new KEV entry is emailed.
 # NOTIFY_MODE=filtered  SG criteria (vulnScore.py): email only for MATCH and TO_CHECK.
@@ -98,6 +101,8 @@ def check_config():
         problems.append("CUSTOMER_EMAILS is empty")
     if NOTIFY_MODE not in ("all", "filtered"):
         problems.append(f"NOTIFY_MODE must be 'all' or 'filtered' (got {NOTIFY_MODE!r})")
+    if os.environ.get("SG_TYPE_FILTER", "0").strip() not in ("", "0", "1"):
+        problems.append(f"SG_TYPE_FILTER must be 0 or 1 (got {os.environ.get('SG_TYPE_FILTER')!r})")
     if NOTIFY_MODE == "filtered" and not get_webhook_url():
         # NO_MATCH entries are reported on Teams only.
         problems.append("no Teams webhook (NOTIFY_MODE=filtered needs it for NO_MATCH)")
@@ -109,6 +114,52 @@ def check_config():
         raise ConfigError("configuration error in .env: " + "; ".join(problems))
     if not get_webhook_url():
         logger.warning("no Teams webhook configured: emails only")
+
+
+def _norm(value):
+    """Case- and whitespace-insensitive form of a vendor / product name."""
+    return " ".join((value or "").split()).casefold()
+
+
+def load_exclusions(path=None):
+    """Read the customer's exclusion list. Missing or unreadable file: no exclusion.
+
+    One line per product, `vendor;product;comment`, names as written in the
+    CISA KEV (vendorProject / product), case and spaces ignored. product `*`
+    excludes every product of the vendor. Lines starting with # are ignored.
+    Fail-open on purpose: a problem with this file must never hide an alert.
+    """
+    path = Path(path or EXCLUSIONS_FILE)
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except FileNotFoundError:
+        logger.info("no exclusion list (%s): every product is alerted", path)
+        return []
+    except Exception:
+        logger.exception("exclusion list %s unreadable: ignored, every product is alerted", path)
+        return []
+    rules = []
+    for n, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [x.strip() for x in line.split(";")]
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            logger.warning("exclusion list %s line %d ignored (expected vendor;product;comment): %r", path, n, line)
+            continue
+        rules.append({"vendor": _norm(parts[0]), "product": _norm(parts[1]),
+                      "label": f"{parts[0]} / {parts[1]}", "comment": ";".join(parts[2:]).strip()})
+    logger.info("exclusion list %s: %d rule(s)", path, len(rules))
+    return rules
+
+
+def excluded_by(vuln, rules):
+    """The exclusion rule matching this KEV entry, or None."""
+    vendor, product = _norm(vuln.get("vendorProject")), _norm(vuln.get("product"))
+    for rule in rules:
+        if rule["vendor"] == vendor and rule["product"] in ("*", product):
+            return rule
+    return None
 
 
 def load_alerted():
@@ -186,9 +237,11 @@ def sendmail_assessed(vuln):
     cid = vuln.get("cveID")
     head = f"[{cid}] - {vuln.get('vendorProject')} / {vuln.get('product')}"
     if a["status"] == "MATCH":
-        subject = f"{head} (EXPLOITED - {a['type']})"
+        # Type criterion disabled by default (vulnScore.TYPE_FILTER): no type in the subject then.
+        criteria = "AV:N / AC:L / PR:N / UI:N, High impact" + (f", {a['type']}" if a.get("type_filter") else "")
+        subject = f"{head} (EXPLOITED - {a['type'] if a.get('type_filter') else 'SG CRITERIA MET'})"
         intro = (f"This CVE was added to the CISA KEV catalog and meets the SG notification criteria "
-                 f"(AV:N / AC:L / PR:N / UI:N, High impact, {a['type']}).")
+                 f"({criteria}).")
     else:
         subject = f"{head} (EXPLOITED - MANUAL REVIEW REQUIRED)"
         intro = ("This CVE was added to the CISA KEV catalog, but the SG criteria could not be "
@@ -243,13 +296,20 @@ def alert(vulns, type_cve="critical", limit=10, report=None):
         from vulnScore import Scorer
         scorer = Scorer()
 
+    exclusions = load_exclusions()
     webhook_url = get_webhook_url()
     sent = 0
     try:
         for v in batch:
             cid = _cve_id(v)
 
-            if filtered:
+            rule = excluded_by(v, exclusions)
+            if rule:
+                # Customer exclusion list: no email, no scoring (no CVE.org / NVD call).
+                v["assessment"] = {"status": "EXCLUDED", "reason": "product excluded by the customer list ("
+                                   + rule["label"] + (f", {rule['comment']}" if rule["comment"] else "") + ")"}
+                logger.info("excluded %s: %s", cid, v["assessment"]["reason"])
+            elif filtered:
                 v["assessment"] = scorer.assess(v)
                 logger.info("assessment %s: %s - %s", cid, v["assessment"]["status"], v["assessment"]["reason"])
             status = (v.get("assessment") or {}).get("status")
@@ -265,19 +325,21 @@ def alert(vulns, type_cve="critical", limit=10, report=None):
                       + (f" | {status} | {v['assessment']['reason']}" if status else ""))
                 continue
 
-            if status == "NO_MATCH":
+            if status in ("NO_MATCH", "EXCLUDED"):
                 # No email: the Teams card is the only trace, so the CVE is recorded
                 # only once Teams accepted it. On failure it is retried next run.
-                logger.info("No email for %s: %s", cid, v["assessment"]["reason"])
-                try:
-                    http = send_teams(build_card([v], type_cve), webhook_url)
-                except Exception:
-                    logger.exception("Teams card failed for %s (NO_MATCH), will retry next run", cid)
-                    entry["teams"] = "failed"
-                    continue
-                logger.info("Teams alert sent for %s. HTTP %d", cid, http)
-                print(f"Teams alert sent for {cid}. HTTP {http}")
-                entry["teams"] = "sent"
+                # (No webhook at all, possible in mode all: recorded, log only.)
+                logger.info("No email for %s (%s): %s", cid, status, v["assessment"]["reason"])
+                if webhook_url:
+                    try:
+                        http = send_teams(build_card([v], type_cve), webhook_url)
+                    except Exception:
+                        logger.exception("Teams card failed for %s (%s), will retry next run", cid, status)
+                        entry["teams"] = "failed"
+                        continue
+                    logger.info("Teams alert sent for %s. HTTP %d", cid, http)
+                    print(f"Teams alert sent for {cid}. HTTP {http}")
+                    entry["teams"] = "sent"
                 alerted.add(cid)
                 sent += 1
                 continue

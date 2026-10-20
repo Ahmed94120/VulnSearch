@@ -23,6 +23,8 @@ STATUS_STYLE = {
                  "MANUAL REVIEW"),
     "NO_MATCH": ("ℹ️ Exploited vulnerability - SG criteria not met, no email", "Default", GREY, "#FFFFFF",
                  "SG CRITERIA NOT MET"),
+    "EXCLUDED": ("\U0001F6AB Exploited vulnerability - product excluded by the customer, no email", "Default",
+                 GREY, "#FFFFFF", "EXCLUDED"),
 }
 
 # CVSS metric -> (label, expected value, {value: meaning})
@@ -90,11 +92,12 @@ REVIEW_CHECKLIST = [
     "PR:N - no account or login needed",
     "UI:N - no user action (click, file to open)",
     "Impact - High on confidentiality, integrity or availability",
-    "Type - RCE (code / command execution) or Authentication Bypass (access without valid credentials)",
 ]
+# Only listed when the type criterion is enabled (SG_TYPE_FILTER=1, see vulnScore.py).
+REVIEW_TYPE_ITEM = "Type - RCE (code / command execution) or Authentication Bypass (access without valid credentials)"
 REVIEW_OUTCOME = [
     "All criteria met: SG criteria met, handle it as a priority",
-    "One criterion not met (e.g. XSS, path traversal, DoS, info disclosure): no action",
+    "One criterion not met: no action",
 ]
 
 
@@ -128,6 +131,8 @@ def _criteria(assessment):
         rows.append((label, f"{names.get(value, value or '?')} ({key}:{value or '?'})", value == expected))
     impacts = [f"{k}:{p.get(k, '?')}" for k in impact]
     rows.append(("Impact (one High)", " / ".join(impacts), any(p.get(k) == "H" for k in impact)))
+    if not assessment.get("type_filter"):
+        return rows  # type criterion disabled: the type is shown in the facts only
     vtype = assessment.get("type")
     if assessment.get("status") == "MATCH":
         rows.append(("Type RCE / Auth bypass", vtype, True))
@@ -153,11 +158,12 @@ def vuln_view(vuln):
         ("Ransomware use", vuln.get("knownRansomwareCampaignUse") or "Unknown"),
         ("CWE", ", ".join(cwes) or "-"),
     ]
-    if a:
+    if "vector" in a:  # assessed by vulnScore (not for an excluded product)
         facts.append(("CVSS vector", a.get("vector") or "not available"))
         facts.append(("Vector source", a.get("source") or "-"))
         if a.get("type"):
-            facts.append(("Type", f"{a['type']} ({a.get('type_evidence')})"))
+            label = "Type" if a.get("type_filter") else "Detected type (info)"
+            facts.append((label, f"{a['type']} ({a.get('type_evidence')})"))
     return {
         "cid": cid,
         "status": a.get("status"),
@@ -177,7 +183,9 @@ def _review(assessment):
     if assessment.get("status") != "TO_CHECK":
         return []
     check = assessment.get("check")
-    checklist = REVIEW_CHECKLIST[-1:] if check == "type_unknown" else REVIEW_CHECKLIST
+    checklist = REVIEW_CHECKLIST + ([REVIEW_TYPE_ITEM] if assessment.get("type_filter") else [])
+    if check == "type_unknown":
+        checklist = [REVIEW_TYPE_ITEM]
     return [("What to do", REVIEW_STEPS.get(check, REVIEW_STEPS["error"])),
             ("Checklist", checklist),
             ("Outcome", REVIEW_OUTCOME)]
